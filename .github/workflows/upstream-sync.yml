@@ -1,0 +1,55 @@
+name: Sync from QuantumNous upstream
+
+on:
+  schedule:
+    # 13:15 UTC = 21:15 Asia/Shanghai
+    - cron: '15 13 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-main-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out fork main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Force-sync main from upstream
+        env:
+          UPSTREAM_REPOSITORY: QuantumNous/new-api
+          UPSTREAM_BRANCH: main
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Preserve this fork-only workflow before resetting every other file to upstream.
+          cp .github/workflows/upstream-sync.yml /tmp/upstream-sync.yml
+          git remote add upstream "https://github.com/${UPSTREAM_REPOSITORY}.git" 2>/dev/null || \
+            git remote set-url upstream "https://github.com/${UPSTREAM_REPOSITORY}.git"
+          git fetch --no-tags upstream "${UPSTREAM_BRANCH}"
+          upstream_sha="$(git rev-parse "upstream/${UPSTREAM_BRANCH}")"
+          current_upstream_sha="$(git merge-base HEAD "upstream/${UPSTREAM_BRANCH}" 2>/dev/null || true)"
+
+          if [ "$current_upstream_sha" = "$upstream_sha" ] && \
+             git diff --quiet "upstream/${UPSTREAM_BRANCH}" -- . ':!.github/workflows/upstream-sync.yml'; then
+            echo "Already synchronized at $upstream_sha"
+            exit 0
+          fi
+
+          git reset --hard "$upstream_sha"
+          mkdir -p .github/workflows
+          cp /tmp/upstream-sync.yml .github/workflows/upstream-sync.yml
+          git add -A
+          git commit -m "chore: sync with QuantumNous/new-api"
+          # Required because the upstream and fork histories may be unrelated/rebased.
+          git push --force-with-lease origin HEAD:main
